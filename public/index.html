@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subir Imagen y AI Desc</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            text-align: center;
+        }
+
+        #imagePreview {
+            max-width: 300px;
+            max-height: 300px;
+            margin-top: 15px;
+        }
+
+        #result {
+            margin-top: 20px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .error {
+            color: red;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Sube una Imagen para obtener una Descripción de la IA</h1>
+
+    <input type="file" id="imageInput" accept="image/*">
+    <button id="uploadButton">Generar Descripción</button>
+
+    <div id="imagePreviewContainer">
+        <img id="imagePreview" src="#" alt="Previsualización de la imagen">
+    </div>
+
+    <p id="status">Esperando archivo...</p>
+    <div id="result"></div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
