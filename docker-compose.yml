@@ -1,0 +1,80 @@
+# docker-compose.yml
+version: '3.8' # Especifica la versión de Docker Compose
+
+# Define los servicios (contenedores) que componen tu aplicación
+services:
+
+  # Servicio de tu aplicación Node.js
+  node-app:
+    build: . # Le dice a Compose que construya la imagen usando el Dockerfile en el directorio actual (.)
+    container_name: my-node-app # Nombre opcional para el contenedor
+    ports:
+      - "3000:3000" # Mapea el puerto 3000 del host al puerto 3000 del contenedor
+    volumes:
+      # Monta el código fuente para desarrollo local. Los cambios se reflejan sin reconstruir la imagen.
+      # Si solo quieres ejecutar la imagen construida, puedes comentar o eliminar esta línea.
+      - .:/app
+
+      # Monta la carpeta de credenciales de GCP dentro del contenedor
+      # ¡Necesario para que la app Node.js dentro del contenedor pueda usar la API de Vertex AI LOCALMENTE!
+      # En Cloud Run/producción NO harías esto; usarías la cuenta de servicio asignada al servicio de Cloud Run.
+      - ./credentials:/app/credentials
+
+    environment:
+      # Pasa la variable de entorno para las credenciales de GCP (ruta dentro del contenedor)
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/credentials.json # <--- ¡Actualiza el nombre del archivo!
+      # Pasa el ID del proyecto GCP
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT} # Lee el valor desde tu archivo .env
+      # Pasa otras variables de entorno que tu app necesite (ej: región de Vertex AI si no está hardcodeada)
+      # - VERTEX_AI_LOCATION=us-central1
+
+    networks:
+      - monitoring-network # Conecta este servicio a nuestra red definida
+    #healthcheck: # Opcional: Define un healthcheck
+    #  test: ["CMD", "curl", "-f", "http://localhost:3000/health"] # Si tienes un endpoint de health
+    #  interval: 30s
+    #  timeout: 10s
+    #  retries: 3
+
+
+    # Servicio de Prometheus
+  prometheus:
+    image: prom/prometheus # Usa la imagen oficial de Prometheus
+    container_name: my-prometheus
+    ports:
+      - "9090:9090" # Mapea el puerto 9090 del host al puerto 9090 del contenedor (UI de Prometheus)
+    volumes:
+      # Monta nuestro archivo de configuración local en la ubicación correcta dentro del contenedor
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      # Monta un volumen con nombre para la persistencia de datos de Prometheus
+      - prometheus_data:/prometheus
+    command: --config.file=/etc/prometheus/prometheus.yml # Le dice a Prometheus qué configuración usar
+    depends_on:
+      - node-app # Asegura que node-app intente iniciar antes que Prometheus
+    networks:
+      - monitoring-network # Conecta a la misma red
+
+  # Servicio de Grafana
+  grafana:
+    image: grafana/grafana # Usa la imagen oficial de Grafana
+    container_name: my-grafana
+    ports:
+      - "3001:3000" # Mapea el puerto 3001 del host al puerto 3000 del contenedor (UI de Grafana)
+    volumes:
+      # Monta un volumen con nombre para la persistencia de datos de Grafana
+      - grafana_data:/var/lib/grafana
+      # Opcional: Puedes montar dashboards y configuraciones personalizadas aquí
+    networks:
+      - monitoring-network # Conecta a la misma red
+    depends_on:
+      - prometheus # Asegura que Prometheus inicie antes que Grafana
+
+# Define los volúmenes con nombre para la persistencia
+volumes:
+  prometheus_data:
+  grafana_data:
+
+    # Define la red virtual
+networks:
+  monitoring-network:
+    driver: bridge # Usa el driver de red bridge por defecto
