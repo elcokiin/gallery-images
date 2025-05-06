@@ -212,6 +212,7 @@ if (!isTestEnvironment) {
     server = app.listen(port, () => {
         console.log(`Servidor escuchando en http://localhost:${port}`);
         console.log(`Frontend disponible en http://localhost:${port}/`);
+        console.log("Hola, estas en la rama main")
     });
 } else {
     // En modo test, proporcionamos una función para iniciar/detener el servidor cuando sea necesario
