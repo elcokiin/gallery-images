@@ -49,6 +49,9 @@ jobs:
 
     - name: Run Tests
       run: npm test
+      env: # <-- Añade este bloque
+        GOOGLE_APPLICATION_CREDENTIALS: /tmp/dummy_credentials.json # El valor exacto no importa ya que VertexAI está mockeado
+        GOOGLE_CLOUD_PROJECT: dummy-project-id 
 
   # Job de Despliegue Continuo: Dockerizar, Subir a GAR, Desplegar a Cloud Run
   # Este job SOLO se ejecutará si el job 'ci' pasa y si el trigger es un push a 'main'
