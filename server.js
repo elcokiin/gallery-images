@@ -213,6 +213,17 @@ if (!isTestEnvironment) {
         console.log(`Servidor escuchando en http://localhost:${port}`);
         console.log(`Frontend disponible en http://localhost:${port}/`);
     });
+} else {
+    // En modo test, proporcionamos una función para iniciar/detener el servidor cuando sea necesario
+    server = {
+        start: () => {
+            return app.listen(port);
+        },
+        close: () => {
+            // Método vacío para el entorno de prueba
+        }
+    };
+    console.log('Ejecutando en modo test - el servidor no se iniciará automáticamente');
 }
 
 // Exportar para testing
