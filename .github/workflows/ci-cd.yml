@@ -3,8 +3,8 @@ name: CI/CD Pipeline to Cloud Run
 on:
   push:
     branches:
-      # - main # Despliegue continuo a producción cuando se fusiona en main
-      - develop # Despliegue continuo a desarrollo cuando se fusiona en develop
+      - main # Despliegue continuo a producción cuando se fusiona en main
+      # - develop # Despliegue continuo a desarrollo cuando se fusiona en develop
       # - release/* # Opcional: Si usas ramas de release, también podrías desplegar desde aquí
   pull_request:
     types: [opened, synchronize, reopened]
