@@ -1,9 +1,12 @@
 // server.js
 const express = require('express');
 const multer = require('multer');
-const { VertexAI } = require('@google-cloud/vertexai'); // Importa el cliente de Vertex AI
+const { VertexAI } = require('@google-cloud/vertexai');
 const dotenv = require('dotenv');
 const path = require('path');
+// --- Añadido para Prometheus ---
+const client = require('prom-client');
+// --- Fin Añadido para Prometheus ---
 
 // Carga las variables de entorno del archivo .env
 dotenv.config();
@@ -26,9 +29,57 @@ if (!process.env.GOOGLE_CLOUD_PROJECT) {
     console.log(`GOOGLE_CLOUD_PROJECT configurado a: ${process.env.GOOGLE_CLOUD_PROJECT}`);
 }
 
+// --- Añadido para Prometheus ---
+// Configura un registro de métricas por defecto y recopila métricas estándar de Node.js
+const Registry = client.Registry;
+const register = new Registry();
+client.collectDefaultMetrics({ register });
+
+// Define métricas personalizadas
+const httpRequestDurationMicroseconds = new client.Histogram({
+    name: 'http_request_duration_ms',
+    help: 'Duración de las peticiones HTTP en milisegundos',
+    labelNames: ['method', 'route', 'code'], // Etiquetas para filtrar/agrupar
+    buckets: [0.1, 5, 15, 50, 100, 200, 300, 400, 500, 1000, 2000, 5000] // Buckets de tiempo
+});
+register.registerMetric(httpRequestDurationMicroseconds);
+
+const imageUploadCounter = new client.Counter({
+    name: 'image_upload_total',
+    help: 'Número total de imágenes subidas',
+    labelNames: ['status'] // 'success', 'fail'
+});
+register.registerMetric(imageUploadCounter);
+
+const aiApiCallCounter = new client.Counter({
+    name: 'ai_api_call_total',
+    help: 'Número total de llamadas a la API de IA',
+    labelNames: ['status'] // 'success', 'fail'
+});
+register.registerMetric(aiApiCallCounter);
+// --- Fin Añadido para Prometheus ---
+
 
 const app = express();
 const port = 3000; // Puerto donde correrá el servidor
+
+// --- Añadido para Prometheus ---
+// Middleware para medir la duración de las peticiones HTTP
+app.use((req, res, next) => {
+    // Ignora el endpoint de métricas para evitar medirlo a sí mismo o causar loops
+    if (req.path === '/metrics') {
+        return next();
+    }
+    const end = httpRequestDurationMicroseconds.startTimer();
+    res.on('finish', () => {
+        // Captura la ruta si está disponible, de lo contrario usa el path
+        const route = req.route ? req.route.path : req.path;
+        end({ method: req.method, route: route, code: res.statusCode });
+    });
+    next();
+});
+// --- Fin Añadido para Prometheus ---
+
 
 // Configura Multer para manejar la subida del archivo
 const upload = multer({ storage: multer.memoryStorage() });
@@ -50,9 +101,8 @@ try {
 
 // Selecciona el modelo generativo a usar (ej: Gemini Pro Vision o Gemini 1.5 Flash)
 // Verifica la disponibilidad del modelo en la región que elegiste
-// 'gemini-2.0-flash-lite-001' es un modelo multimodal estable
-// 'gemini-1.5-flash-001' es más rápido y a menudo más económico para muchas tareas, también multimodal
-const modelId = 'gemini-2.0-flash-lite-001';
+// 'gemini-1.0-pro-vision-001' o 'gemini-1.5-flash-001' son buenas opciones multimodales
+const modelId = 'gemini-2.0-flash-lite-001'; // Puedes cambiar a 'gemini-1.5-flash-001'
 let generativeModel;
 try {
     generativeModel = vertexAIClient.getGenerativeModel({ model: modelId });
@@ -70,13 +120,26 @@ console.log(`Configurando Express para servir archivos estáticos desde: ${publi
 app.use(express.static(publicPath));
 console.log('Middleware de archivos estáticos configurado.');
 
+// --- Añadido para Prometheus ---
+// Ruta para exponer las métricas - ¡Prometheus raspará este endpoint!
+app.get('/metrics', async (req, res) => {
+    console.log('GET /metrics recibido. Sirviendo métricas.');
+    res.setHeader('Content-Type', register.contentType);
+    res.send(await register.metrics());
+});
+// --- Fin Añadido para Prometheus ---
+
+
 // Ruta para manejar la subida de la imagen
 app.post('/upload', upload.single('image'), async (req, res) => {
     console.log('POST /upload recibido.');
 
     if (!req.file) {
         console.warn('No se ha subido ningún archivo en /upload.');
-        return res.status(400).send('No se ha subido ningún archivo.');
+        // --- Añadido para Prometheus ---
+        imageUploadCounter.labels('fail').inc();
+        // --- Fin Añadido para Prometheus ---
+        return res.status(400).json({ message: 'No se ha subido ningún archivo.' });
     }
 
     console.log(`Archivo recibido: ${req.file.originalname}, tipo: ${req.file.mimetype}, tamaño: ${req.file.size} bytes.`);
@@ -87,53 +150,52 @@ app.post('/upload', upload.single('image'), async (req, res) => {
 
     try {
         // --- Paso 1: Codificar la imagen a Base64 ---
-        // Los modelos multimodales a menudo aceptan la imagen como datos inline (Base64)
         const base64Image = imageBuffer.toString('base64');
-        console.log(`Imagen codificada a Base64 (${base64Image.substring(0, 30)}...).`); // Log los primeros chars
+        console.log(`Imagen codificada a Base64 (${base64Image.substring(0, 30)}...).`);
 
         // --- Paso 2: Definir el prompt en español ---
-        // Le damos una instrucción clara a la IA sobre qué describir y en qué idioma
         const prompt = "Describe esta imagen detalladamente en un párrafo coherente y fluido en español.";
         console.log(`Prompt para el modelo: "${prompt}"`);
 
         // --- Paso 3: Preparar el contenido para la llamada al modelo ---
         const contents = [
             {
-                role: 'user', parts: [ // El rol 'user' es para la entrada del usuario
-                    { text: prompt }, // La instrucción de texto
-                    { inlineData: { mimeType: mimeType, data: base64Image } } // La imagen como datos inline
+                role: 'user', parts: [
+                    { text: prompt },
+                    { inlineData: { mimeType: mimeType, data: base64Image } }
                 ],
             },
         ];
         console.log('Contenido para el modelo preparado (texto + imagen).');
 
-
         // --- Paso 4: Llamar al modelo generativo de Vertex AI ---
         console.log(`Llamando al método generateContent del modelo "${modelId}"...`);
         const result = await generativeModel.generateContent({ contents });
         console.log('Respuesta del modelo generativo recibida.');
-        // console.log('Respuesta completa del modelo:', JSON.stringify(result, null, 2)); // Log respuesta completa si quieres debuggear
 
         // --- Paso 5: Extraer el texto generado de la respuesta ---
-        // La respuesta contiene 'candidates', cada uno con 'content' y dentro 'parts'
         if (result.response && result.response.candidates && result.response.candidates.length > 0) {
-            // Concatenar todas las partes de texto de la primera respuesta candidata
             generatedDescription = result.response.candidates[0].content.parts
                 .map(part => part.text)
                 .join('');
             console.log(`Descripción generada exitosamente (longitud: ${generatedDescription.length}).`);
-            // console.log('Descripción generada:', generatedDescription); // Log la descripción completa si quieres debuggear
+            // --- Añadido para Prometheus ---
+            imageUploadCounter.labels('success').inc(); // Incrementa contador de subida exitosa
+            aiApiCallCounter.labels('success').inc(); // Incrementa contador de llamada a IA exitosa
+            // --- Fin Añadido para Prometheus ---
         } else {
             console.warn('El modelo no devolvió una descripción válida en la respuesta.');
-            // Manejar posibles bloqueos de seguridad u otros problemas
             if (result.response && result.response.promptFeedback && result.response.promptFeedback.blockReason) {
                 console.warn(`El prompt fue bloqueado por: ${result.response.promptFeedback.blockReason}`);
                 generatedDescription = `La IA no pudo generar una descripción (bloqueada por seguridad: ${result.response.promptFeedback.blockReason}).`;
             } else {
                 generatedDescription = 'La IA no pudo generar una descripción para esta imagen.';
             }
+            // --- Añadido para Prometheus ---
+            imageUploadCounter.labels('success').inc(); // La subida fue exitosa, pero la IA falló
+            aiApiCallCounter.labels('fail').inc(); // Incrementa contador de llamada a IA fallida
+            // --- Fin Añadido para Prometheus ---
         }
-
 
         // Envía la descripción generada (el párrafo) al cliente (frontend)
         console.log('Enviando respuesta JSON al cliente con la descripción generada.');
@@ -141,19 +203,14 @@ app.post('/upload', upload.single('image'), async (req, res) => {
 
     } catch (error) {
         console.error('Error DETECTADO al llamar a Vertex AI:', error);
-
-        // Intenta enviar un mensaje de error más amigable al frontend
-        let errorMessage = 'Error interno del servidor al procesar la imagen.';
-        if (error.message && error.message.includes('429 Resource Exhausted')) {
-            errorMessage = 'Error de cuota: has excedido el límite de peticiones. Inténtalo de nuevo más tarde.';
-        } else if (error.message) {
-            errorMessage = `Error de IA: ${error.message}`; // Envía el mensaje de error de la API
-        }
-
-
-        res.status(500).json({ success: false, error: errorMessage });
+        return res.status(500).json({
+            success: false,
+            error: `Error al generar descripción con IA: ${error.message}`,
+        });
     }
 });
+
+module.exports = app;
 
 // Inicia el servidor
 app.listen(port, () => {
