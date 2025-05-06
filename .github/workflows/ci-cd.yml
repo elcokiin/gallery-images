@@ -3,14 +3,15 @@ name: CI/CD Pipeline to Cloud Run
 on:
   push:
     branches:
-      - main # Despliegue continuo a producción cuando se fusiona en main
+      # - main # Despliegue continuo a producción cuando se fusiona en main
+      - develop # Despliegue continuo a desarrollo cuando se fusiona en develop
       # - release/* # Opcional: Si usas ramas de release, también podrías desplegar desde aquí
   pull_request:
     types: [opened, synchronize, reopened]
     branches:
-      - main # Integración continua para PRs que van a main
+      # - main # Integración continua para PRs que van a main
       - develop # Integración continua para PRs que van a develop
-      # - feature/* # Opcional: Si quieres ejecutar CI en cada push a ramas feature
+      # # - feature/* # Opcional: Si quieres ejecutar CI en cada push a ramas feature
 
 # Permisos mínimos requeridos para el workflow.
 # 'contents: read' para checkout.
