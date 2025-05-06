@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const imagePreview = document.getElementById('imagePreview');
     const statusElement = document.getElementById('status');
     const resultElement = document.getElementById('result');
+    const loaderContainer = document.querySelector('.loader-container');
 
     // Ocultar la previsualización inicialmente
     document.getElementById('imagePreviewContainer').style.display = 'none';
@@ -45,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
         statusElement.innerText = 'Subiendo y procesando imagen...';
         resultElement.innerText = ''; // Limpiar resultado anterior
         resultElement.classList.remove('error');
+        loaderContainer.style.display = 'flex'; // Mostrar el loader
 
         // Usar FormData para enviar el archivo
         const formData = new FormData();
@@ -59,6 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             const data = await response.json(); // Esperar la respuesta JSON del servidor
+            loaderContainer.style.display = 'none'; // Ocultar el loader
 
             if (response.ok && data.success) {
                 // Mostrar la descripción generada por la IA
@@ -74,6 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         } catch (error) {
             // Manejar errores de red o de la llamada fetch
+            loaderContainer.style.display = 'none'; // Ocultar el loader
             resultElement.innerText = 'Error al conectar con el servidor o enviar la imagen.';
             resultElement.classList.add('error');
             statusElement.innerText = 'Error de conexión.';
