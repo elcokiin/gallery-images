@@ -1,34 +1,32 @@
-# .github/workflows/ci-cd.yml
-
 name: CI/CD Pipeline to Cloud Run
 
 on:
   push:
     branches:
-      - main # Despliegue continuo a producción cuando se fusiona en main
+      # - main # Despliegue continuo a producción cuando se fusiona en main
+      - develop # Despliegue continuo a desarrollo cuando se fusiona en develop
       # - release/* # Opcional: Si usas ramas de release, también podrías desplegar desde aquí
   pull_request:
+    types: [opened, synchronize, reopened]
     branches:
-      - main # Integración continua para PRs que van a main
+      # - main # Integración continua para PRs que van a main
       - develop # Integración continua para PRs que van a develop
-      # - feature/* # Opcional: Si quieres ejecutar CI en cada push a ramas feature
-
+      # # - feature/* # Opcional: Si quieres ejecutar CI en cada push a ramas feature
 
 # Permisos mínimos requeridos para el workflow.
 # 'contents: read' para checkout.
 # 'id-token: write' si usas Workload Identity Federation (recomendado para GCP auth).
-# Si usas la clave JSON directa, 'secrets: read' puede ser implícito con google-github-actions/auth o necesitarse explícitamente.
+# 'pull-requests: read' para los triggers de PR.
 permissions:
   contents: read # Necesario para actions/checkout
   id-token: write # Necesario para google-github-actions/auth si usas Workload Identity Federation
-  # Si usas clave JSON, el secret reader se maneja por google-github-actions/auth@v1
+  pull-requests: read # Importante para los eventos de PR
 
 env: # Variables de entorno globales para el workflow (opcional, pueden ir por job)
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GAR_LOCATION: ${{ secrets.GAR_LOCATION }} # Región de Artifact Registry
   GAR_REPOSITORY: ${{ secrets.GAR_REPOSITORY }} # Nombre del repositorio de Artifact Registry
   CLOUD_RUN_SERVICE_NAME: ${{ secrets.CLOUD_RUN_SERVICE_NAME }} # Nombre del servicio Cloud Run
-  # No pongas CLOUD_RUN_SERVICE_ACCOUNT aquí, solo en el paso de despliegue si lo necesitas
 
 jobs:
   # Job de Integración Continua: Construir, Testear, Verificar
@@ -49,20 +47,11 @@ jobs:
       # --production=false instala devDependencies, necesarias para tests y linters
       run: npm install --production=false
 
-    # --- Paso: Linting (Opcional pero Recomendado) ---
-    # Necesitas tener ESLint u otro linter configurado en tu proyecto y un script "lint" en package.json
-    # - name: Run Linter
-    #   run: npm run lint
-
-    # --- Paso Crucial: Ejecutar Pruebas ---
-    # ¡NECESITAS TENER PRUEBAS AUTOMATIZADAS CONFIGURADAS (Jest, Mocha, etc.)!
-    # Asegúrate de que "npm test" ejecuta tus pruebas y devuelve código 0 si pasan.
     - name: Run Tests
       run: npm test
-      # Puedes pasar variables de entorno si tus pruebas las necesitan (ej: variables para mocks)
-      # env:
-      #   MOCK_API_KEY: dummy_key_for_tests
-
+      env: # <-- Añade este bloque
+        GOOGLE_APPLICATION_CREDENTIALS: /tmp/dummy_credentials.json # El valor exacto no importa ya que VertexAI está mockeado
+        GOOGLE_CLOUD_PROJECT: dummy-project-id 
 
   # Job de Despliegue Continuo: Dockerizar, Subir a GAR, Desplegar a Cloud Run
   # Este job SOLO se ejecutará si el job 'ci' pasa y si el trigger es un push a 'main'
@@ -78,33 +67,22 @@ jobs:
        name: Production # O Staging, si despliegas a un entorno de pruebas primero
        url: ${{ steps.deploy.outputs.url }} # Enlace a la URL del servicio desplegado
 
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
     # --- Autenticación con Google Cloud ---
-    # Usa la acción oficial para autenticarte con la cuenta de servicio de CI/CD
-    # Esto configura automáticamente gcloud CLI, Docker para GAR/GCR, etc.
     - name: Authenticate to Google Cloud
       id: 'auth' # Asigna un ID para referenciar este paso si es necesario
       uses: 'google-github-actions/auth@v1'
       with:
-        # Opción 1 (Recomendada): Workload Identity Federation
-        # workload_identity_provider: projects/PROJECT_NUMBER/locations/global/pool/POOL_ID/providers/PROVIDER_ID
-        # service_account: your-ci-cd-service-account-email@your-project-id.iam.gserviceaccount.com
-        # Lee la documentación de google-github-actions/auth para configurarlo en GCP y GitHub
-
-        # Opción 2: Usando clave JSON (Más simple para empezar, menos recomendado para prod a largo plazo)
         credentials_json: '${{ secrets.GCP_SA_KEY_CI_CD }}'
-
 
     # --- Configurar Docker ---
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
     # --- Construir y Etiquetar la imagen Docker ---
-    # La acción 'auth@v1' ya configura Docker para autenticarse con GAR/GCR
     - name: Build and tag Docker image
       run: |
         # Define el nombre completo de la imagen incluyendo el registro, repo y tag (usamos el SHA del commit como tag)
@@ -113,14 +91,12 @@ jobs:
         # Construye la imagen usando el Dockerfile en el directorio actual (.)
         docker build . -t $IMAGE_NAME
 
-
     # --- Subir la imagen Docker a Google Artifact Registry ---
     - name: Push Docker image
       run: |
         IMAGE_NAME=${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.CLOUD_RUN_SERVICE_NAME }}:${{ github.sha }}
         echo "Pushing image: $IMAGE_NAME"
         docker push $IMAGE_NAME
-
 
     # --- Desplegar la imagen en Google Cloud Run ---
     - name: Deploy to Cloud Run
@@ -131,13 +107,9 @@ jobs:
         region: ${{ env.GAR_LOCATION }} # Región donde desplegar el servicio (normalmente la misma que GAR)
         # La imagen a desplegar es la que acabamos de subir
         image: ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.CLOUD_RUN_SERVICE_NAME }}:${{ github.sha }}
-        # Configura la cuenta de servicio que usará el servicio Cloud Run (¡la que tiene permisos para Vertex AI!)
-        service_account: ${{ secrets.CLOUD_RUN_SERVICE_ACCOUNT }} # <--- Usar el secret con el email de la cuenta de servicio de runtime
-
-        # Opcional: Deshabilitar acceso sin autenticación si no quieres que sea público
-        # --no-allow-unauthenticated: 'true'
-
+        # Configura la cuenta de servicio que usará el servicio Cloud Run
+        service_account: ${{ secrets.CLOUD_RUN_SERVICE_ACCOUNT }}
 
     # --- Paso: Mostrar la URL del servicio desplegado ---
-    - name: Show deployed URL
-      run: echo "Servicio {{ env.CLOUD_RUN_SERVICE_NAME }} desplegado en: ${{ steps.deploy.outputs.url }}"
+    # - name: Show deployed URL
+    #   run: echo "Servicio ${{ env.CLOUD_RUN_SERVICE_NAME }} desplegado en: ${{ steps.deploy.outputs.url }}"
