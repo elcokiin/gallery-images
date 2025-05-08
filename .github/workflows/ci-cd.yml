@@ -1,38 +1,32 @@
-name: CI/CD Pipeline to Cloud Run
+name: CI/CD Pipeline
 
 on:
   push:
     branches:
       - main # Despliegue continuo a producción cuando se fusiona en main
-      # - develop # Despliegue continuo a desarrollo cuando se fusiona en develop
-      # - release/* # Opcional: Si usas ramas de release, también podrías desplegar desde aquí
   pull_request:
     types: [opened, synchronize, reopened]
     branches:
-      # - main # Integración continua para PRs que van a main
       - develop # Integración continua para PRs que van a develop
-      # # - feature/* # Opcional: Si quieres ejecutar CI en cada push a ramas feature
 
-# Permisos mínimos requeridos para el workflow.
-# 'contents: read' para checkout.
-# 'id-token: write' si usas Workload Identity Federation (recomendado para GCP auth).
-# 'pull-requests: read' para los triggers de PR.
 permissions:
   contents: read # Necesario para actions/checkout
-  id-token: write # Necesario para google-github-actions/auth si usas Workload Identity Federation
+  id-token: write # Necesario para autenticación
   pull-requests: read # Importante para los eventos de PR
 
-env: # Variables de entorno globales para el workflow (opcional, pueden ir por job)
+env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GAR_LOCATION: ${{ secrets.GAR_LOCATION }} # Región de Artifact Registry
-  GAR_REPOSITORY: ${{ secrets.GAR_REPOSITORY }} # Nombre del repositorio de Artifact Registry
-  CLOUD_RUN_SERVICE_NAME: ${{ secrets.CLOUD_RUN_SERVICE_NAME }} # Nombre del servicio Cloud Run
+  GAR_LOCATION: ${{ secrets.GAR_LOCATION }}
+  GAR_REPOSITORY: ${{ secrets.GAR_REPOSITORY }}
+  CLOUD_RUN_SERVICE_NAME: ${{ secrets.CLOUD_RUN_SERVICE_NAME }}
+  # Variables para SSH
+  SSH_HOST: ${{ secrets.SSH_HOST }}
+  SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
 
 jobs:
-  # Job de Integración Continua: Construir, Testear, Verificar
   ci:
     name: Build and Test
-    runs-on: ubuntu-latest # O otro runner si necesitas un SO específico
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
@@ -41,90 +35,62 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '20' # Asegúrate de que coincida con la versión en tu Dockerfile
+        node-version: '20'
 
     - name: Install dependencies
-      # --production=false instala devDependencies, necesarias para tests y linters
       run: npm install --production=false
 
     - name: Run Tests
       run: npm test
-      env: # <-- Añade este bloque
-        GOOGLE_APPLICATION_CREDENTIALS: /tmp/dummy_credentials.json # El valor exacto no importa ya que VertexAI está mockeado
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS: /tmp/dummy_credentials.json
         GOOGLE_CLOUD_PROJECT: dummy-project-id 
 
-  # Job de Despliegue Continuo: Dockerizar, Subir a GAR, Desplegar a Cloud Run
-  # Este job SOLO se ejecutará si el job 'ci' pasa y si el trigger es un push a 'main'
-  # Job de Despliegue Continuo vía SSH
+  # Despliegue por SSH reemplazando el despliegue a Cloud Run
   cd:
     name: Deploy via SSH
-    # ... configuraciones del job cd ...
-
+    runs-on: ubuntu-latest
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    environment:
+      name: Production
+      
     steps:
-    # ... Checkout code ...
-    # ... Setup SSH Agent ...
-
-    # --- Paso 2: Transferir Archivos al Servidor ---
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup SSH
+      uses: webfactory/ssh-agent@v0.8.0
+      with:
+        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      
     - name: Copy files via SCP
       run: |
         ssh -o StrictHostKeyChecking=no ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }} "mkdir -p /home/${{ env.SSH_USERNAME }}/my-app"
-        export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin/npm
-
         scp -r -o StrictHostKeyChecking=no \
             ./* \
             ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }}:/home/${{ env.SSH_USERNAME }}/my-app/
-      # Si usas appleboy/scp-action en su lugar, podrías necesitar una opción similar en esa acción.
-
-    # --- Paso 3: Instalar Dependencias en el Servidor ---
+      
     - name: Install dependencies on server
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ env.SSH_HOST }}
         username: ${{ env.SSH_USERNAME }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
-        # password: ${{ env.SSH_PASSWORD }} # <--- PELIGROSO
         script: |
-          export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin/npm
+          export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin
           cd /home/${{ env.SSH_USERNAME }}/my-app
-          npm install --production # Instala solo las dependencias de producción
-
-    # --- Paso 4: Reiniciar la Aplicación en el Servidor (usando PM2) ---
-    # Asegúrate de que PM2 también está en el PATH o usa su ruta completa si no
+          npm install --production
+      
     - name: Restart application on server (PM2)
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ env.SSH_HOST }}
         username: ${{ env.SSH_USERNAME }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
-        # password: ${{ env.SSH_PASSWORD }} # <--- PELIGROSO
         script: |
-          export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin/npm
-
+          export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin
           cd /home/${{ env.SSH_USERNAME }}/my-app
-          # Puedes usar 'which pm2' en el servidor para saber su ruta
-          # Si pm2 no está en el PATH estándar, usa su ruta completa aquí:
-          # /home/appdeployer/.nvm/versions/node/vX.Y.Z/bin/pm2 start ...
           pm2 start server.js --name my-app --update-env || pm2 restart my-app --update-env
-          pm2 save # Guarda el estado de PM2
-
-    # Puedes añadir pasos adicionales si usas systemd en lugar de PM2
-    # - name: Restart application on server (systemd)
-    #   uses: appleboy/ssh-action@v1.0.3
-    #   with:
-    #     host: ${{ env.SSH_HOST }}
-    #     username: ${{ env.SSH_USERNAME }}
-    #     key: ${{ secrets.SSH_PRIVATE_KEY }}
-    #     script: |
-    #       # Necesitarás configurar sudo sin contraseña para el usuario deployer
-    #       # si systemctl requiere sudo
-    #       sudo systemctl restart my-app.service
-
-
-    # --- Eliminar el paso de despliegue a Cloud Run ---
-    # - name: Deploy to Cloud Run # <-- Eliminar este paso
-    #   ...
-
-
-    # --- Paso Opcional: Mostrar mensaje de éxito ---
-    - name: Deployment Successful
-      run: echo "Despliegue a ${{ env.SSH_HOST }} completado para la versión ${{ github.sha }}"
+          pm2 save
