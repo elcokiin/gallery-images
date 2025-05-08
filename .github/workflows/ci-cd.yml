@@ -46,168 +46,51 @@ jobs:
         GOOGLE_APPLICATION_CREDENTIALS: /tmp/dummy_credentials.json
         GOOGLE_CLOUD_PROJECT: dummy-project-id 
 
- # Job de Despliegue Continuo vía SSH
+  # Despliegue por SSH reemplazando el despliegue a Cloud Run
   cd:
     name: Deploy via SSH
     runs-on: ubuntu-latest
-    needs: ci # Este job depende del job 'ci'. Solo se ejecuta si el CI pasa.
-    # Despliega solo en push a la rama 'main' (o la que decidas para producción)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' # Mantenemos la condición de despliegue a prod
-
-    # Permisos requeridos para el workflow (los mismos que antes, aunque algunos no se usen para SSH)
-    permissions:
-      contents: read # Necesario para actions/checkout
-      # id-token: write # Ya no necesario para GCP auth en este job
-      # pull-requests: read # No necesario para este job
-
-    # Variables de entorno para el job CD (SSH y GCP)
-    env:
-      SSH_HOST: ${{ secrets.SSH_HOST }} # IP del servidor
-      SSH_USERNAME: ${{ secrets.SSH_USERNAME }} # Usuario SSH en el servidor (app_deployer)
-      # Variables GCP necesarias para referenciar el proyecto/ubicaciones, NO credenciales directas aquí
-      PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }} # Asegúrate de que esto está en secrets
-      GAR_LOCATION: ${{ secrets.GAR_LOCATION }} # Asegúrate de que esto está en secrets
-      GAR_REPOSITORY: ${{ secrets.GAR_REPOSITORY }} # Asegúrate de que esto está en secrets
-      CLOUD_RUN_SERVICE_NAME: ${{ secrets.CLOUD_RUN_SERVICE_NAME }} # Asegúrate de que esto está en secrets
-
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    environment:
+      name: Production
+      
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    # Paso 1: Crear archivo de credenciales en el runner (Usando /tmp)
-    # Guarda el contenido del secret GCP_SA_KEY_CI_CD en un archivo temporal en /tmp
-    - name: Create GCP Credentials File on Runner
-      run: |
-        echo "Creating temporary GCP credentials file in /tmp..."
-        # Usa una ruta en /tmp, es un buen lugar para archivos temporales en runners
-        CRED_FILE_PATH="/tmp/gcp_credentials.json"
-        echo "${{ secrets.GCP_SA_KEY_CI_CD }}" > "$CRED_FILE_PATH"
-        echo "File created. Verifying existence and permissions:"
-        ls -l "$CRED_FILE_PATH" # Verifica que el archivo existe y sus permisos
-        # Opcional: Muestra las primeras líneas para confirmar contenido (¡cuidado con logs si secret no se enmascara!)
-        # head "$CRED_FILE_PATH"
-
-        echo "Temporary GCP credentials file created at $CRED_FILE_PATH"
-      shell: bash # Asegura que se usa bash para la redirección y comandos
-
-    # --- Paso 2: Configurar Agente SSH con Clave Privada ---
-    # Esto permite que los comandos ssh/scp posteriores usen la clave automáticamente
-    - name: Setup SSH Agent
-      uses: webfactory/ssh-agent@v0.8.0 # Acción para añadir la clave privada al agente SSH
+      
+    - name: Setup SSH
+      uses: webfactory/ssh-agent@v0.8.0
       with:
-        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }} # Usa el Secret con tu clave privada
-
-    # --- Paso 3: Transferir Archivos de Código Y Credenciales al Servidor ---
+        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      
     - name: Copy files via SCP
       run: |
-        # Exporta la variable PATH (si no está en el PATH estándar del runner)
-        # Asegúrate de esta ruta en el runner si no es estándar (probablemente /usr/local/bin o /usr/bin)
-        chmod -R +r .
-        echo "Permissions updated."
-        export PATH=$PATH:/usr/local/bin # Esta ruta es para el runner, no para el servidor
-        echo "Verifying PATH on runner: $(echo $PATH)" # Debug
-
-        # Asegúrate de que los directorios existen en el servidor
-        echo "Ensuring directories exist on server..."
-        ssh -o StrictHostKeyChecking=no ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }} "mkdir -p /home/${{ env.SSH_USERNAME }}/my-app /home/${{ env.SSH_USERNAME }}/.gcp"
-        echo "Directories ensured."
-
-        # Define la ruta del archivo temporal de credenciales en el runner
-        CRED_FILE_PATH="/tmp/gcp_credentials.json"
-        echo "Temporary credentials file path on runner: $CRED_FILE_PATH"
-
-        # --- Copia los archivos de código de la aplicación (Lista EXPLICITA) ---
-        # ADAPTA ESTA LISTA a los archivos y carpetas reales de tu proyecto
-        echo "Copying application files to /home/${{ env.SSH_USERNAME }}/my-app/..."
+        ssh -o StrictHostKeyChecking=no ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }} "mkdir -p /home/${{ env.SSH_USERNAME }}/my-app"
         scp -r -o StrictHostKeyChecking=no \
-            ./server.js \          # Tu archivo principal de Express
-            ./package.json \       # Archivo de dependencias
-            ./package-lock.json \  # O ./yarn.lock si usas yarn
-            ./public \             # Carpeta con tus archivos frontend (index.html, script.js, style.css)
-            # Si tienes otros archivos o carpetas necesarios (ej: 'src', 'config'), añádelos aquí:
-            # ./otra-carpeta \
-            # ./otro-archivo.env \ # Si usas .env en prod (menos seguro que vars de PM2/Systemd)
+            ./* \
             ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }}:/home/${{ env.SSH_USERNAME }}/my-app/
-
-        # --- Copia el archivo de credenciales al servidor ---
-        echo "Copying GCP credentials file from runner ($CRED_FILE_PATH) to server (/home/${{ env.SSH_USERNAME }}/.gcp/credentials.json)..."
-        scp -o StrictHostKeyChecking=no \
-            "$CRED_FILE_PATH" \ # Usa la variable para asegurar que es la misma ruta
-            ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }}:/home/${{ env.SSH_USERNAME }}/.gcp/credentials.json # Destino en el servidor
-
-        echo "File copy completed."
-      shell: bash # Asegura que se usa bash
-
-    # --- Resto de pasos del job cd (Install dependencies, Restart PM2) ---
-    # ... (Asegúrate de que la variable GOOGLE_APPLICATION_CREDENTIALS se establece correctamente en el paso de PM2
-    #      apuntando a /home/${{ env.SSH_USERNAME }}/.gcp/credentials.json en el servidor) ...
-  
-    # --- Paso 4: Instalar Dependencias en el Servidor ---
+      
     - name: Install dependencies on server
-      uses: appleboy/ssh-action@v1.0.3 # Acción para ejecutar comandos SSH
-      with:
-        host: ${{ env.SSH_HOST }}
-        username: ${{ env.SSH_USERNAME }}
-        key: ${{ secrets.SSH_PRIVATE_KEY }} # Usa la clave privada para autenticar
-        # password: ${{ env.SSH_PASSWORD }} # <--- PELIGROSO: Usar solo si no puedes usar claves SSH
-        script: |
-          # --- ¡CRUCIAL! Exporta la variable PATH para que npm se encuentre ---
-          # Usa la ruta EXACTA que obtuviste con 'which npm' o 'which node' en el servidor
-          export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin # <--- ¡RUTA CORREGIDA!
-
-          echo "Verifying PATH before npm install: $(echo $PATH)" # Debug
-          echo "Verifying Node existence before npm install: $(which node)" # Debug
-          echo "Verifying NPM existence before npm install: $(which npm)" # Debug
-
-          cd /home/${{ env.SSH_USERNAME }}/my-app
-          echo "Running npm install --production..."
-          npm install --production # Instala solo las dependencias de producción
-          echo "npm install completed."
-      # Añade un timeout mayor si npm install tarda mucho
-      timeout-minutes: 5
-
-
-    # --- Paso 5: Reiniciar la Aplicación en el Servidor (usando PM2) ---
-    - name: Restart application on server (PM2)
-      uses: appleboy/ssh-action@v1.0.3 # Acción para ejecutar comandos SSH
+      uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ env.SSH_HOST }}
         username: ${{ env.SSH_USERNAME }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
-        # password: ${{ env.SSH_PASSWORD }} # <--- PELIGROSO
         script: |
-          # --- ¡CRUCIAL! Exporta la variable PATH para que pm2 y node/npm se encuentren ---
-          # Usa la ruta EXACTA que obtuviste
-          export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin # <--- ¡RUTA CORREGIDA!
-
-          echo "Verifying PATH before PM2 command: $(echo $PATH)" # Debug
-          echo "Verifying PM2 existence: $(which pm2 || echo 'pm2 not found')" # Debug (maneja si pm2 no está en el PATH)
-
+          export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin
           cd /home/${{ env.SSH_USERNAME }}/my-app
-
-          # --- ¡CRUCIAL! Establece la variable de entorno GOOGLE_APPLICATION_CREDENTIALS para el proceso PM2 ---
-          # La ruta debe ser la ubicación en el servidor donde copiaste el archivo de credenciales.
-          # Asegúrate de que el usuario PM2 puede leer este archivo.
-          export GOOGLE_APPLICATION_CREDENTIALS="/home/${{ env.SSH_USERNAME }}/.gcp/credentials.json" # <--- Establece la variable
-
-          echo "GOOGLE_APPLICATION_CREDENTIALS set to: $GOOGLE_APPLICATION_CREDENTIALS" # Debug
-
-          # Ahora inicia o reinicia la aplicación con PM2.
-          # PM2 heredará la variable de entorno exportada JUSTO ANTES de su ejecución.
-          # --update-env asegura que si la app ya estaba corriendo, PM2 la reinicie con las env vars actuales.
-          # --env production es buena práctica para Node.js
-          echo "Executing PM2 command..."
-          # Puedes usar la ruta completa a pm2 si export PATH no funciona consistentemente
-          # ej: /home/${{ env.SSH_USERNAME }}/.nvm/versions/node/v22.15.0/bin/pm2 start ...
-          pm2 start server.js --name my-app --update-env --env production || pm2 restart my-app --update-env
-
-          echo "PM2 command executed. Saving PM2 state..."
-          pm2 save # Guarda el estado de PM2
-
-          echo "Restart step completed."
-      timeout-minutes: 2 # Ajusta si el reinicio/inicio tarda más
-
-    # --- Paso Opcional: Mostrar mensaje de éxito ---
-    - name: Deployment Successful
-      run: echo "Despliegue a ${{ env.SSH_HOST }} completado para la versión ${{ github.sha }}"
-      shell: bash
+          npm install --production
+      
+    - name: Restart application on server (PM2)
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ env.SSH_HOST }}
+        username: ${{ env.SSH_USERNAME }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin
+          cd /home/${{ env.SSH_USERNAME }}/my-app
+          pm2 start server.js --name my-app --update-env || pm2 restart my-app --update-env
+          pm2 save
