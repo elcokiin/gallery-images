@@ -3,41 +3,7 @@ version: '3.8' # Especifica la versión de Docker Compose
 
 # Define los servicios (contenedores) que componen tu aplicación
 services:
-
-  # Servicio de tu aplicación Node.js
-  node-app:
-    build: . # Le dice a Compose que construya la imagen usando el Dockerfile en el directorio actual (.)
-    container_name: my-node-app # Nombre opcional para el contenedor
-    ports:
-      - "3000:3000" # Mapea el puerto 3000 del host al puerto 3000 del contenedor
-    volumes:
-      # Monta el código fuente para desarrollo local. Los cambios se reflejan sin reconstruir la imagen.
-      # Si solo quieres ejecutar la imagen construida, puedes comentar o eliminar esta línea.
-      - .:/app
-
-      # Monta la carpeta de credenciales de GCP dentro del contenedor
-      # ¡Necesario para que la app Node.js dentro del contenedor pueda usar la API de Vertex AI LOCALMENTE!
-      # En Cloud Run/producción NO harías esto; usarías la cuenta de servicio asignada al servicio de Cloud Run.
-      - ./credentials:/app/credentials
-
-    environment:
-      # Pasa la variable de entorno para las credenciales de GCP (ruta dentro del contenedor)
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/credentials.json # <--- ¡Actualiza el nombre del archivo!
-      # Pasa el ID del proyecto GCP
-      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT} # Lee el valor desde tu archivo .env
-      # Pasa otras variables de entorno que tu app necesite (ej: región de Vertex AI si no está hardcodeada)
-      # - VERTEX_AI_LOCATION=us-central1
-
-    networks:
-      - monitoring-network # Conecta este servicio a nuestra red definida
-    #healthcheck: # Opcional: Define un healthcheck
-    #  test: ["CMD", "curl", "-f", "http://localhost:3000/health"] # Si tienes un endpoint de health
-    #  interval: 30s
-    #  timeout: 10s
-    #  retries: 3
-
-
-    # Servicio de Prometheus
+  # Servicio de Prometheus
   prometheus:
     image: prom/prometheus # Usa la imagen oficial de Prometheus
     container_name: my-prometheus
@@ -49,10 +15,8 @@ services:
       # Monta un volumen con nombre para la persistencia de datos de Prometheus
       - prometheus_data:/prometheus
     command: --config.file=/etc/prometheus/prometheus.yml # Le dice a Prometheus qué configuración usar
-    depends_on:
-      - node-app # Asegura que node-app intente iniciar antes que Prometheus
     networks:
-      - monitoring-network # Conecta a la misma red
+      - monitoring-network
 
   # Servicio de Grafana
   grafana:
@@ -65,16 +29,36 @@ services:
       - grafana_data:/var/lib/grafana
       # Opcional: Puedes montar dashboards y configuraciones personalizadas aquí
     networks:
-      - monitoring-network # Conecta a la misma red
+      - monitoring-network
     depends_on:
       - prometheus # Asegura que Prometheus inicie antes que Grafana
+
+  node-exporter:
+    # Nuevo servicio para monitorear el sistema operativo del host
+    image: prom/node-exporter:latest # Usa la imagen oficial de Node Exporter
+    container_name: node-exporter
+    restart: always # Asegura que se reinicie si falla
+    # Monta volúmenes para acceder a la información del sistema del host
+    volumes:
+      - /proc:/host/proc:ro # Acceso a información de procesos
+      - /sys:/host/sys:ro # Acceso a información del sistema (CPU, etc.)
+      - /:/rootfs:ro,rslave # Acceso al sistema de archivos raíz del host para métricas de disco
+    command: | # Pasa argumentos al comando de inicio de Node Exporter
+      --path.procfs=/host/proc
+      --path.sysfs=/host/sys
+      --collector.filesystem.mount-points-exclude="^/(sys|proc|dev|host|etc)($|/)" # Excluye puntos de montaje virtuales/no relevantes
+    ports:
+      - "9100:9100" # Puerto por defecto de Node Exporter - mapea 9100 del host al 9100 del contenedor
+    networks:
+      - monitoring-network # Asegúrate de que esté en la misma red que Prometheus
+    pid: host # Permite al contenedor ver los procesos del host (necesario para algunas métricas)
 
 # Define los volúmenes con nombre para la persistencia
 volumes:
   prometheus_data:
   grafana_data:
 
-    # Define la red virtual
+
 networks:
   monitoring-network:
-    driver: bridge # Usa el driver de red bridge por defecto
+    driver: bridge # Usa el driver de red por defecto (puedes cambiarlo si es necesario)

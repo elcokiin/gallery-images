@@ -14,7 +14,6 @@ alerting:
 scrape_configs:
   # El nombre del "trabajo" o "job". Aparecerá como una etiqueta en tus métricas (ej: job="node-app")
   - job_name: 'node-app'
-
     # Descubrimiento de servicios estático. Define manualmente los targets.
     static_configs:
       # Aquí defines los targets a raspar.
@@ -25,3 +24,9 @@ scrape_configs:
         # es posible que necesites la IP real de tu máquina en tu red o configurar una red bridge específica
         # o usar Docker Compose para que los contenedores se vean entre sí por nombre.
         # Si tu app y Prometheus corren directamente en la misma máquina sin Docker, usarías 'localhost:3000'.
+
+  - job_name: 'node-exporter' # Nombre para este trabajo
+    static_configs:
+      # El target es el nombre del servicio en docker-compose y el puerto de Node Exporter
+      - targets: ['node-exporter:9100']
+  # --- Fin Nuevo trabajo ---
