@@ -73,13 +73,21 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    # --- Paso 1: Crear archivo de credenciales en el runner ---
-    # Guarda el contenido del secret GCP_SA_KEY_CI_CD en un archivo temporal en el runner
+# --- Paso 1: Crear archivo de credenciales en el runner (Usando /tmp) ---
+    # Guarda el contenido del secret GCP_SA_KEY_CI_CD en un archivo temporal en /tmp
     - name: Create GCP Credentials File on Runner
-      run: echo '${{ secrets.GCP_SA_KEY_CI_CD }}' > /home/runner/gcp_credentials.json # Guarda en home del runner
-      shell: bash # Asegura que se usa bash para la redirección
+      run: |
+        echo "Creating temporary GCP credentials file in /tmp..."
+        # Usa una ruta en /tmp, es un buen lugar para archivos temporales en runners
+        CRED_FILE_PATH="/tmp/gcp_credentials.json"
+        echo "${{ secrets.GCP_SA_KEY_CI_CD }}" > "$CRED_FILE_PATH"
+        echo "File created. Verifying existence and permissions:"
+        ls -l "$CRED_FILE_PATH" # Verifica que el archivo existe y sus permisos
+        # Opcional: Muestra las primeras líneas para confirmar contenido (¡cuidado con logs si secret no se enmascara!)
+        # head "$CRED_FILE_PATH"
 
+        echo "Temporary GCP credentials file created at $CRED_FILE_PATH"
+      shell: bash # Asegura que se usa bash para la redirección y comandos
 
     # --- Paso 2: Configurar Agente SSH con Clave Privada ---
     # Esto permite que los comandos ssh/scp posteriores usen la clave automáticamente
@@ -88,37 +96,43 @@ jobs:
       with:
         ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }} # Usa el Secret con tu clave privada
 
-
-    # --- Paso 3: Transferir Archivos de Código Y Credenciales al Servidor ---
+    # --- Paso 3: Transferir Archivos de Código Y Credenciales al Servidor (Usando /tmp) ---
     - name: Copy files via SCP
       run: |
-        # Exporta la variable PATH para asegurar que comandos como 'ssh' y 'scp' se encuentran
-        # (útil si tus comandos ssh/scp no están en el PATH estándar del runner)
+        # Exporta la variable PATH para ssh/scp (si no están en el PATH estándar del runner)
         # Esto no es el PATH del servidor, sino del runner de GitHub Actions.
-        export PATH=$PATH:/usr/local/bin # La ruta de ssh/scp suele ser esta, verificar si necesario
+        # La ruta /usr/bin/ssh y /usr/bin/scp suele estar en el PATH por defecto del runner, pero no hace daño asegurarla.
+        # export PATH=$PATH:/usr/local/bin # O la ruta correcta en el runner si no es estándar
+        echo "Verifying PATH on runner: $(echo $PATH)" # Debug
 
         # Asegúrate de que el directorio de la aplicación existe en el servidor
-        echo "Ensuring application directory exists on server..."
+        echo "Ensuring application directory /home/${{ env.SSH_USERNAME }}/my-app exists on server..."
         ssh -o StrictHostKeyChecking=no ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }} "mkdir -p /home/${{ env.SSH_USERNAME }}/my-app"
+
         # Asegúrate de que el directorio para guardar credenciales existe en el servidor
-        echo "Ensuring GCP credentials directory exists on server..."
+        echo "Ensuring GCP credentials directory /home/${{ env.SSH_USERNAME }}/.gcp exists on server..."
         ssh -o StrictHostKeyChecking=no ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }} "mkdir -p /home/${{ env.SSH_USERNAME }}/.gcp"
 
+        # Define la ruta del archivo temporal de credenciales en el runner (¡debe coincidir con el Paso 1!)
+        CRED_FILE_PATH="/tmp/gcp_credentials.json"
+        echo "Temporary credentials file path on runner: $CRED_FILE_PATH"
 
         # Copia los archivos de código de la aplicación
         echo "Copying application files to /home/${{ env.SSH_USERNAME }}/my-app/..."
+        # El './*' copia todos los archivos y carpetas del directorio de checkout.
         scp -r -o StrictHostKeyChecking=no \
             ./* \
             ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }}:/home/${{ env.SSH_USERNAME }}/my-app/
 
-        # Copia el archivo de credenciales al servidor en una ubicación segura dentro del home del usuario
-        echo "Copying GCP credentials file to /home/${{ env.SSH_USERNAME }}/.gcp/credentials.json..."
+        # Copia el archivo de credenciales al servidor en una ubicación segura
+        echo "Copying GCP credentials file from runner ($CRED_FILE_PATH) to server (/home/${{ env.SSH_USERNAME }}/.gcp/credentials.json)..."
+        # --- ¡Aquí ocurre el error "No such file or directory" si $CRED_FILE_PATH no existe o es incorrecta! ---
         scp -o StrictHostKeyChecking=no \
-            /home/runner/gcp_credentials.json \ # Archivo temporal en el runner
-            ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }}:/home/${{ env.SSH_USERNAME }}/.gcp/credentials.json # Destino seguro en el servidor
+            "$CRED_FILE_PATH" \ # <--- Usa la variable para asegurar que es la misma ruta
+            ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }}:/home/${{ env.SSH_USERNAME }}/.gcp/credentials.json # Destino en el servidor
 
         echo "File copy completed."
-      shell: bash # Asegura que se usa bash para el script run
+      shell: bash # Asegura que se usa bash
 
     # --- Paso 4: Instalar Dependencias en el Servidor ---
     - name: Install dependencies on server
