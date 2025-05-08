@@ -58,76 +58,54 @@ jobs:
   # Job de Despliegue Continuo vía SSH
   cd:
     name: Deploy via SSH
-    runs-on: ubuntu-latest
-    needs: ci # Este job depende del job 'ci'. Solo se ejecuta si el CI pasa.
-    # Despliega solo en push a la rama 'main' (o la que decidas para producción)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' # Mantenemos la condición de despliegue a prod
-
-    # Permisos requeridos para el workflow (los mismos que antes, aunque algunos no se usen para SSH)
-    permissions:
-      contents: read # Necesario para actions/checkout
-      # id-token: write # Ya no necesario para GCP auth en este job
-      # pull-requests: read # No necesario para este job
-
-    # Variables de entorno para el job CD (credenciales SSH)
-    env:
-      SSH_HOST: ${{ secrets.SSH_HOST }} # IP del servidor
-      SSH_USERNAME: ${{ secrets.SSH_USERNAME }} # Usuario SSH
-      # SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }} # <-- PELIGROSO: Usar solo si no puedes usar claves SSH
-
+    # ... configuraciones del job cd ...
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    # --- Paso 1: Configurar Agente SSH con Clave Privada ---
-    - name: Setup SSH Agent
-      uses: webfactory/ssh-agent@v0.8.0 # Acción para añadir la clave privada al agente SSH
-      with:
-        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }} # Usa el Secret con tu clave privada
+    # ... Checkout code ...
+    # ... Setup SSH Agent ...
 
     # --- Paso 2: Transferir Archivos al Servidor ---
-    # Usaremos scp (Secure Copy) sobre SSH. El agente SSH configurado se usará automáticamente.
-    # Necesitas la carpeta de destino en el servidor (ej: /home/appdeployer/my-app)
     - name: Copy files via SCP
       run: |
-        # Asegúrate de que el directorio de destino existe en el servidor
-        ssh -o StrictHostKeyChecking=no $SSH_USERNAME@$SSH_HOST "mkdir -p /home/$SSH_USERNAME/my-app"
-        # Copia los archivos del repositorio (excepto .git, node_modules si no quieres copiarlos)
-        # Puedes necesitar excluir carpetas grandes como node_modules si las instalas en el servidor
+        ssh -o StrictHostKeyChecking=no ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }} "mkdir -p /home/${{ env.SSH_USERNAME }}/my-app"
+        export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin/npm
+
         scp -r -o StrictHostKeyChecking=no \
             ./* \
-            $SSH_USERNAME@$SSH_HOST:/home/$SSH_USERNAME/my-app/
-      # Si usas autenticación por contraseña (NO RECOMENDADO), necesitarías una acción diferente
-      # como appleboy/scp-action y pasarle la contraseña, lo cual es INSEGURO.
+            ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }}:/home/${{ env.SSH_USERNAME }}/my-app/
+      # Si usas appleboy/scp-action en su lugar, podrías necesitar una opción similar en esa acción.
 
     # --- Paso 3: Instalar Dependencias en el Servidor ---
-    # Ejecuta npm install en el servidor vía SSH
     - name: Install dependencies on server
-      uses: appleboy/ssh-action@v1.0.3 # Acción para ejecutar comandos SSH
+      uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ env.SSH_HOST }}
         username: ${{ env.SSH_USERNAME }}
-        key: ${{ secrets.SSH_PRIVATE_KEY }} # Usa la clave privada para autenticar
-        # password: ${{ env.SSH_PASSWORD }} # <--- PELIGROSO: Usar solo si no hay clave SSH
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        # password: ${{ env.SSH_PASSWORD }} # <--- PELIGROSO
         script: |
+          export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin/npm
           cd /home/${{ env.SSH_USERNAME }}/my-app
           npm install --production # Instala solo las dependencias de producción
 
     # --- Paso 4: Reiniciar la Aplicación en el Servidor (usando PM2) ---
-    # Ejecuta comandos de PM2 vía SSH
+    # Asegúrate de que PM2 también está en el PATH o usa su ruta completa si no
     - name: Restart application on server (PM2)
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ env.SSH_HOST }}
         username: ${{ env.SSH_USERNAME }}
-        key: ${{ secrets.SSH_PRIVATE_KEY }} # Autenticación
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
         # password: ${{ env.SSH_PASSWORD }} # <--- PELIGROSO
         script: |
+          export PATH=$PATH:/home/app_deployer/.nvm/versions/node/v22.15.0/bin/npm
+
           cd /home/${{ env.SSH_USERNAME }}/my-app
+          # Puedes usar 'which pm2' en el servidor para saber su ruta
+          # Si pm2 no está en el PATH estándar, usa su ruta completa aquí:
+          # /home/appdeployer/.nvm/versions/node/vX.Y.Z/bin/pm2 start ...
           pm2 start server.js --name my-app --update-env || pm2 restart my-app --update-env
-          pm2 save
-      # Asegúrate de que PM2 está instalado globalmente en el servidor y configurado para el usuario SSH
+          pm2 save # Guarda el estado de PM2
 
     # Puedes añadir pasos adicionales si usas systemd en lugar de PM2
     # - name: Restart application on server (systemd)
