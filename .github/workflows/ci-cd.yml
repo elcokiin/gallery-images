@@ -102,6 +102,8 @@ jobs:
       run: |
         # Exporta la variable PATH (si no está en el PATH estándar del runner)
         # Asegúrate de esta ruta en el runner si no es estándar (probablemente /usr/local/bin o /usr/bin)
+        chmod -R +r .
+        echo "Permissions updated."
         export PATH=$PATH:/usr/local/bin # Esta ruta es para el runner, no para el servidor
         echo "Verifying PATH on runner: $(echo $PATH)" # Debug
 
