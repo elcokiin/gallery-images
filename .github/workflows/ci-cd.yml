@@ -73,7 +73,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-# --- Paso 1: Crear archivo de credenciales en el runner (Usando /tmp) ---
+
+    # Paso 1: Crear archivo de credenciales en el runner (Usando /tmp)
     # Guarda el contenido del secret GCP_SA_KEY_CI_CD en un archivo temporal en /tmp
     - name: Create GCP Credentials File on Runner
       run: |
@@ -96,44 +97,49 @@ jobs:
       with:
         ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }} # Usa el Secret con tu clave privada
 
-    # --- Paso 3: Transferir Archivos de Código Y Credenciales al Servidor (Usando /tmp) ---
+    # --- Paso 3: Transferir Archivos de Código Y Credenciales al Servidor ---
     - name: Copy files via SCP
       run: |
-        # Exporta la variable PATH para ssh/scp (si no están en el PATH estándar del runner)
-        # Esto no es el PATH del servidor, sino del runner de GitHub Actions.
-        # La ruta /usr/bin/ssh y /usr/bin/scp suele estar en el PATH por defecto del runner, pero no hace daño asegurarla.
-        # export PATH=$PATH:/usr/local/bin # O la ruta correcta en el runner si no es estándar
+        # Exporta la variable PATH (si no está en el PATH estándar del runner)
+        # Asegúrate de esta ruta en el runner si no es estándar (probablemente /usr/local/bin o /usr/bin)
+        export PATH=$PATH:/usr/local/bin # Esta ruta es para el runner, no para el servidor
         echo "Verifying PATH on runner: $(echo $PATH)" # Debug
 
-        # Asegúrate de que el directorio de la aplicación existe en el servidor
-        echo "Ensuring application directory /home/${{ env.SSH_USERNAME }}/my-app exists on server..."
-        ssh -o StrictHostKeyChecking=no ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }} "mkdir -p /home/${{ env.SSH_USERNAME }}/my-app"
+        # Asegúrate de que los directorios existen en el servidor
+        echo "Ensuring directories exist on server..."
+        ssh -o StrictHostKeyChecking=no ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }} "mkdir -p /home/${{ env.SSH_USERNAME }}/my-app /home/${{ env.SSH_USERNAME }}/.gcp"
+        echo "Directories ensured."
 
-        # Asegúrate de que el directorio para guardar credenciales existe en el servidor
-        echo "Ensuring GCP credentials directory /home/${{ env.SSH_USERNAME }}/.gcp exists on server..."
-        ssh -o StrictHostKeyChecking=no ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }} "mkdir -p /home/${{ env.SSH_USERNAME }}/.gcp"
-
-        # Define la ruta del archivo temporal de credenciales en el runner (¡debe coincidir con el Paso 1!)
+        # Define la ruta del archivo temporal de credenciales en el runner
         CRED_FILE_PATH="/tmp/gcp_credentials.json"
         echo "Temporary credentials file path on runner: $CRED_FILE_PATH"
 
-        # Copia los archivos de código de la aplicación
+        # --- Copia los archivos de código de la aplicación (Lista EXPLICITA) ---
+        # ADAPTA ESTA LISTA a los archivos y carpetas reales de tu proyecto
         echo "Copying application files to /home/${{ env.SSH_USERNAME }}/my-app/..."
-        # El './*' copia todos los archivos y carpetas del directorio de checkout.
         scp -r -o StrictHostKeyChecking=no \
-            ./* \
+            ./server.js \          # Tu archivo principal de Express
+            ./package.json \       # Archivo de dependencias
+            ./package-lock.json \  # O ./yarn.lock si usas yarn
+            ./public \             # Carpeta con tus archivos frontend (index.html, script.js, style.css)
+            # Si tienes otros archivos o carpetas necesarios (ej: 'src', 'config'), añádelos aquí:
+            # ./otra-carpeta \
+            # ./otro-archivo.env \ # Si usas .env en prod (menos seguro que vars de PM2/Systemd)
             ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }}:/home/${{ env.SSH_USERNAME }}/my-app/
 
-        # Copia el archivo de credenciales al servidor en una ubicación segura
+        # --- Copia el archivo de credenciales al servidor ---
         echo "Copying GCP credentials file from runner ($CRED_FILE_PATH) to server (/home/${{ env.SSH_USERNAME }}/.gcp/credentials.json)..."
-        # --- ¡Aquí ocurre el error "No such file or directory" si $CRED_FILE_PATH no existe o es incorrecta! ---
         scp -o StrictHostKeyChecking=no \
-            "$CRED_FILE_PATH" \ # <--- Usa la variable para asegurar que es la misma ruta
+            "$CRED_FILE_PATH" \ # Usa la variable para asegurar que es la misma ruta
             ${{ env.SSH_USERNAME }}@${{ env.SSH_HOST }}:/home/${{ env.SSH_USERNAME }}/.gcp/credentials.json # Destino en el servidor
 
         echo "File copy completed."
       shell: bash # Asegura que se usa bash
 
+    # --- Resto de pasos del job cd (Install dependencies, Restart PM2) ---
+    # ... (Asegúrate de que la variable GOOGLE_APPLICATION_CREDENTIALS se establece correctamente en el paso de PM2
+    #      apuntando a /home/${{ env.SSH_USERNAME }}/.gcp/credentials.json en el servidor) ...
+  
     # --- Paso 4: Instalar Dependencias en el Servidor ---
     - name: Install dependencies on server
       uses: appleboy/ssh-action@v1.0.3 # Acción para ejecutar comandos SSH
