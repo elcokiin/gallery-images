@@ -4,20 +4,10 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
-# ... (alerting si lo tienes) ...
-
-# Configuración para raspar targets
 scrape_configs:
-  # Tu trabajo para raspar tu aplicación Node.js (ahora en el host)
   - job_name: 'node-app'
     static_configs:
-      # --- ¡CAMBIA EL TARGET AQUÍ! ---
-      # El target es la IP del host de Docker vista desde dentro del contenedor Prometheus,
-      # y el puerto donde la app Node.js escucha (3000).
-      # 172.17.0.1 es una IP común para el gateway de la red Docker bridge por defecto.
-      # Si usas una red personalizada o 172.17.0.1 no funciona, necesitas encontrar la IP correcta (ver paso 6).
-      - targets: ['206.189.239.85:3000'] # <--- ¡MODIFICA ESTA LÍNEA!
-      # --- Fin CAMBIO ---
+      - targets: ['206.189.239.85:3000'] 
 
   # Tu trabajo para raspar Node Exporter (si ya lo añadiste al compose)
   - job_name: 'node-exporter'
