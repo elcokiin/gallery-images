@@ -1,32 +1,17 @@
-# prometheus/prometheus.yml
 global:
-  scrape_interval: 15s # Raspa los targets cada 15 segundos.
-  evaluation_interval: 15s # Evalúa las reglas cada 15 segundos.
+  scrape_interval: 15s
+  evaluation_interval: 15s
 
-# Reglas de alerta (opcional para empezar)
-alerting:
-  alertmanagers:
-    - static_configs:
-        - targets:
-          # - alertmanager:9093
-
-# Configuración para raspar targets
 scrape_configs:
-  # El nombre del "trabajo" o "job". Aparecerá como una etiqueta en tus métricas (ej: job="node-app")
-  - job_name: 'node-app'
-    # Descubrimiento de servicios estático. Define manualmente los targets.
+  - job_name: 'prometheus'
     static_configs:
-      # Aquí defines los targets a raspar.
-      # Como tu app corre en localhost:3000 en tu máquina local:
-      - targets: ['node-app:3000']
-        # NOTA: 'host.docker.internal' es un DNS especial en Docker Desktop (Windows/Mac)
-        # que resuelve a la IP de tu máquina host. Si usas Linux nativo sin Docker Desktop,
-        # es posible que necesites la IP real de tu máquina en tu red o configurar una red bridge específica
-        # o usar Docker Compose para que los contenedores se vean entre sí por nombre.
-        # Si tu app y Prometheus corren directamente en la misma máquina sin Docker, usarías 'localhost:3000'.
+      - targets: ['localhost:9090']
 
-  - job_name: 'node-exporter' # Nombre para este trabajo
+  - job_name: 'node_exporter'
     static_configs:
-      # El target es el nombre del servicio en docker-compose y el puerto de Node Exporter
-      - targets: ['node-exporter:9100']
-  # --- Fin Nuevo trabajo ---
+      - targets: ['node_exporter:9100']
+  
+  - job_name: 'conectagro-app'
+    static_configs:
+      - targets: ['app:3000']
+    # metrics_path: '/metrics'
