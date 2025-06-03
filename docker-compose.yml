@@ -1,63 +1,71 @@
-# docker-compose.yml
-version: '3.8' # Especifica la versión de Docker Compose
-
-# Define los servicios (contenedores) que componen tu aplicación
 services:
+  description-image-ia:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: description-image-ia
+    ports:
+      - "8002:3000"
+    volumes:
+      - ./credentials:/home/app_deployer/my-app/credentials
+    env_file:
+      - .env
+    networks:
+      - gallery-network
   # Servicio de Prometheus
-  prometheus:
-    image: prom/prometheus # Usa la imagen oficial de Prometheus
-    container_name: my-prometheus
-    ports:
-      - "9090:9090" # Mapea el puerto 9090 del host al puerto 9090 del contenedor (UI de Prometheus)
-    volumes:
-      # Monta nuestro archivo de configuración local en la ubicación correcta dentro del contenedor
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      # Monta un volumen con nombre para la persistencia de datos de Prometheus
-      - prometheus_data:/prometheus
-    command: --config.file=/etc/prometheus/prometheus.yml # Le dice a Prometheus qué configuración usar
-    networks:
-      - monitoring-network
+  # prometheus:
+  #   image: prom/prometheus # Usa la imagen oficial de Prometheus
+  #   container_name: my-prometheus
+  #   ports:
+  #     - "9090:9090" # Mapea el puerto 9090 del host al puerto 9090 del contenedor (UI de Prometheus)
+  #   volumes:
+  #     # Monta nuestro archivo de configuración local en la ubicación correcta dentro del contenedor
+  #     - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     # Monta un volumen con nombre para la persistencia de datos de Prometheus
+  #     - prometheus_data:/prometheus
+  #   command: --config.file=/etc/prometheus/prometheus.yml # Le dice a Prometheus qué configuración usar
+  #   networks:
+  #     - monitoring-network
 
-  # Servicio de Grafana
-  grafana:
-    image: grafana/grafana # Usa la imagen oficial de Grafana
-    container_name: my-grafana
-    ports:
-      - "3001:3000" # Mapea el puerto 3001 del host al puerto 3000 del contenedor (UI de Grafana)
-    volumes:
-      # Monta un volumen con nombre para la persistencia de datos de Grafana
-      - grafana_data:/var/lib/grafana
-      # Opcional: Puedes montar dashboards y configuraciones personalizadas aquí
-    networks:
-      - monitoring-network
-    depends_on:
-      - prometheus # Asegura que Prometheus inicie antes que Grafana
+  # # Servicio de Grafana
+  # grafana:
+  #   image: grafana/grafana # Usa la imagen oficial de Grafana
+  #   container_name: my-grafana
+  #   ports:
+  #     - "3001:3000" # Mapea el puerto 3001 del host al puerto 3000 del contenedor (UI de Grafana)
+  #   volumes:
+  #     # Monta un volumen con nombre para la persistencia de datos de Grafana
+  #     - grafana_data:/var/lib/grafana
+  #     # Opcional: Puedes montar dashboards y configuraciones personalizadas aquí
+  #   networks:
+  #     - monitoring-network
+  #   depends_on:
+  #     - prometheus # Asegura que Prometheus inicie antes que Grafana
 
-  node-exporter:
-    # Nuevo servicio para monitorear el sistema operativo del host
-    image: prom/node-exporter:latest
-    container_name: node-exporter
-    restart: always
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro,rslave
-    command: | # Pasa argumentos al comando de inicio de Node Exporter
-      --path.procfs=/host/proc
-      --path.sysfs=/host/sys
-      --collector.filesystem.mount-points-exclude="^/(sys|proc|dev|host|etc)($|/)"
-    ports:
-      - "9100:9100"
-    networks:
-      - monitoring-network
-    pid: host
+  # node-exporter:
+  #   # Nuevo servicio para monitorear el sistema operativo del host
+  #   image: prom/node-exporter:latest
+  #   container_name: node-exporter
+  #   restart: always
+  #   volumes:
+  #     - /proc:/host/proc:ro
+  #     - /sys:/host/sys:ro
+  #     - /:/rootfs:ro,rslave
+  #   command: | # Pasa argumentos al comando de inicio de Node Exporter
+  #     --path.procfs=/host/proc
+  #     --path.sysfs=/host/sys
+  #     --collector.filesystem.mount-points-exclude="^/(sys|proc|dev|host|etc)($|/)"
+  #   ports:
+  #     - "9100:9100"
+  #   networks:
+  #     - monitoring-network
+  #   pid: host
 
-# Define los volúmenes con nombre para la persistencia
-volumes:
-  prometheus_data:
-  grafana_data:
-
+  # # Define los volúmenes con nombre para la persistencia
+  # volumes:
+  #   prometheus_data:
+  #   grafana_data:
 
 networks:
-  monitoring-network:
-    driver: bridge # Usa el driver de red por defecto (puedes cambiarlo si es necesario)
+  gallery-network:
+    external: true
